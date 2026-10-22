@@ -1,9 +1,14 @@
 from django.contrib import admin
 from django.urls import path
 from accounts import views
+from accounts import admin_dashboard
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("gestion/login/", admin_dashboard.admin_login, name="admin_login"),
+    path("gestion/logout/", admin_dashboard.admin_logout, name="admin_logout"),
+    path("gestion/", admin_dashboard.dashboard, name="admin_dashboard"),
+    path("gestion/usuarios/<int:user_id>/", admin_dashboard.user_detail, name="admin_user_detail"),
     path("", views.home, name="home"),
     path("api/register/", views.register, name="register"),
     path("api/login/", views.login_view, name="login"),

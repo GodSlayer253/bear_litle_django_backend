@@ -19,6 +19,7 @@ class Transaction(models.Model):
         DEPOSIT = 'deposit', 'Depósito'
         WITHDRAWAL = 'withdrawal', 'Retiro'
         GAME_REWARD = 'game_reward', 'Recompensa de minijuego'
+        ADMIN_ADJUSTMENT = 'admin_adjustment', 'Ajuste administrativo'
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pendiente'
         APPROVED = 'approved', 'Aprobado'
