@@ -209,8 +209,6 @@ tk==0.1.0
 tomlkit==0.13.3
 tornado==6.5.4
 tqdm==4.67.2
-# Editable install with no version control (traceflow-core==0.1.0)
--e d:\tesis\aplicacion\nueva carpeta\trace_flow_core\logging_service
 traitlets==5.14.3
 Twisted==25.5.0
 txaio==25.12.2
