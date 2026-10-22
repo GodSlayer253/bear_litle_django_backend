@@ -12,7 +12,7 @@ from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 import random
-from .models import Wallet, Transaction, GameSession
+from .models import Wallet, Transaction, GameSession, Referral, DailyTaskClaim
 from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -37,6 +37,11 @@ def notify_admin(subject, body):
 
 @ensure_csrf_cookie
 def home(request):
+    # El código se guarda en sesión al visitar el enlace, pero no se acredita nada
+    # hasta que una cuenta nueva se registra correctamente.
+    code = (request.GET.get('ref') or '').strip().upper()
+    if code and len(code) <= 16:
+        request.session['pending_referral_code'] = code
     return render(request, "index.html")
 
 def json_body(request):
@@ -49,7 +54,7 @@ def json_body(request):
 def user_payload(user):
     wallet, _ = Wallet.objects.get_or_create(user=user)
     return {"id": user.id, "username": user.username, "email": user.email,
-            "balance": str(wallet.balance), "total_invested": str(wallet.total_invested), "vip_active": wallet.vip_active}
+            "balance": str(wallet.balance), "total_invested": str(wallet.total_invested), "vip_active": wallet.vip_active, "referral_code": wallet.referral_code}
 
 def transaction_payload(tx):
     ready_at = tx.created_at + timedelta(hours=REVIEW_HOURS) if tx.status == Transaction.Status.PENDING and tx.kind in (Transaction.Kind.DEPOSIT, Transaction.Kind.WITHDRAWAL) else None
@@ -87,7 +92,26 @@ def register(request):
         validate_password(password)
     except ValidationError as exc:
         return JsonResponse({"message": "La contraseña no cumple los requisitos de seguridad.", "errors": {"password": list(exc.messages)}}, status=400)
-    user = User.objects.create_user(username=username, email=email, password=password)
+    with db_transaction.atomic():
+        user = User.objects.create_user(username=username, email=email, password=password)
+        Wallet.objects.get_or_create(user=user)
+        code = (request.session.pop('pending_referral_code', '') or '').strip().upper()
+        if code:
+            inviter_wallet = Wallet.objects.select_for_update().filter(referral_code=code).select_related('user').first()
+            # Evita autorreferidos, cuentas duplicadas y pagos repetidos. La cuenta invitada
+            # debe ser nueva y el vínculo se registra una sola vez por usuario.
+            if inviter_wallet and inviter_wallet.user_id != user.pk and not Referral.objects.filter(invited=user).exists():
+                inviter_wallet.balance += Decimal('1.00')
+                inviter_wallet.save(update_fields=['balance'])
+                tx = Transaction.objects.create(
+                    user=inviter_wallet.user, kind=Transaction.Kind.ADMIN_ADJUSTMENT,
+                    status=Transaction.Status.APPROVED, amount=Decimal('1.00'),
+                    description=f'Recompensa de referido por registro de {user.username}',
+                    reviewed_at=timezone.now(),
+                )
+                Referral.objects.create(inviter=inviter_wallet.user, invited=user,
+                    reward=Decimal('1.00'), status=Referral.Status.CREDITED,
+                    credited_at=timezone.now(), transaction=tx)
     login(request, user)
     return JsonResponse({"message": "La cuenta se creó correctamente.", "user": user_payload(user)}, status=201)
 
@@ -133,8 +157,79 @@ def account_state(request):
         "vip_active": wallet.vip_active, "initial_investment_met": wallet.total_invested >= Decimal('10.00'),
         "next_withdrawal_at": next_withdrawal.isoformat() if next_withdrawal else None,
         "withdrawal_wait_seconds": max(0, int((next_withdrawal-now).total_seconds())) if next_withdrawal else 0,
-        "withdrawal_limit": "20.00" if wallet.vip_active else "2.00"},
+        "withdrawal_limit": "20.00" if wallet.vip_active else "2.00",
+        "referral_code": wallet.referral_code,
+        "referral_count": Referral.objects.filter(inviter=request.user, status=Referral.Status.CREDITED).count(),
+        "referral_rewards": str(Referral.objects.filter(inviter=request.user, status=Referral.Status.CREDITED).aggregate(total=__import__('django.db.models', fromlist=['Sum']).Sum('reward'))['total'] or Decimal('0.00'))},
+        "daily_tasks": daily_tasks_payload(request.user, wallet),
         "transactions": [transaction_payload(t) for t in txs]})
+
+DAILY_TASKS = [
+    ("Revisa el panel de seguridad y lee las recomendaciones", "security"),
+    ("Actualiza tu perfil y comprueba que el correo sea correcto", "profile"),
+    ("Lee las condiciones de recompensas y retiros", "terms"),
+    ("Consulta tu historial de movimientos", "history"),
+    ("Completa la revisión diaria de tu campamento", "camp"),
+    ("Repasa cómo proteger tu cuenta y contraseña", "account"),
+    ("Revisa el estado de tus misiones", "missions"),
+    ("Consulta las normas para evitar enlaces sospechosos", "links"),
+    ("Comprueba los datos de tu billetera", "wallet"),
+    ("Lee el resumen de tu membresía", "membership"),
+]
+
+def daily_tasks_payload(user, wallet):
+    today = timezone.localdate()
+    count = 4 if wallet.vip_active else 2
+    reward = Decimal('5.00') if wallet.vip_active else Decimal('1.00')
+    # El conjunto cambia por día y por usuario, sin depender del reloj del navegador.
+    import hashlib
+    seed = f'{user.pk}:{today.isoformat()}'.encode()
+    offset = int(hashlib.sha256(seed).hexdigest()[:8], 16) % len(DAILY_TASKS)
+    ordered = DAILY_TASKS[offset:] + DAILY_TASKS[:offset]
+    claims = {c.slot: c for c in DailyTaskClaim.objects.filter(user=user, task_date=today)}
+    tasks = []
+    for slot in range(1, count + 1):
+        title = ordered[slot - 1][0]
+        claim = claims.get(slot)
+        tasks.append({'slot': slot, 'title': title, 'reward': str(reward), 'completed': bool(claim), 'completed_at': claim.completed_at.isoformat() if claim else None})
+    return {'date': today.isoformat(), 'plan': 'VIP' if wallet.vip_active else 'Normal', 'daily_limit': count,
+            'reward_per_task': str(reward), 'tasks': tasks,
+            'notice': 'La tarea se registra cuando pulsas completar. Las actividades informativas no son una prueba independiente de una acción externa.'}
+
+@require_GET
+def daily_tasks(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'message': 'Inicia sesión.'}, status=401)
+    wallet, _ = Wallet.objects.get_or_create(user=request.user)
+    return JsonResponse(daily_tasks_payload(request.user, wallet))
+
+@require_POST
+def daily_task_claim(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'message': 'Inicia sesión.'}, status=401)
+    data = json_body(request) or {}
+    try:
+        slot = int(data.get('slot'))
+    except (TypeError, ValueError):
+        return JsonResponse({'message': 'Tarea no válida.'}, status=400)
+    today = timezone.localdate()
+    with db_transaction.atomic():
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=request.user)
+        payload = daily_tasks_payload(request.user, wallet)
+        task = next((item for item in payload['tasks'] if item['slot'] == slot), None)
+        if not task:
+            return JsonResponse({'message': 'Esta tarea no pertenece al plan actual.'}, status=400)
+        if task['completed']:
+            return JsonResponse({'message': 'Esta tarea ya fue reclamada hoy.'}, status=409)
+        title = task['title']; reward = Decimal(task['reward'])
+        wallet.balance += reward
+        wallet.save(update_fields=['balance'])
+        tx = Transaction.objects.create(user=request.user, kind=Transaction.Kind.GAME_REWARD,
+            status=Transaction.Status.APPROVED, amount=reward,
+            description=f'Recompensa tarea diaria: {title}', reviewed_at=timezone.now())
+        DailyTaskClaim.objects.create(user=request.user, task_date=today, slot=slot,
+            title=title, reward=reward, transaction=tx)
+    return JsonResponse({'message': 'Tarea registrada y recompensa acreditada.', 'reward': str(reward), 'balance': str(wallet.balance)})
 
 @require_POST
 def deposit_request(request):

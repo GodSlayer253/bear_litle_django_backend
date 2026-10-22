@@ -3,7 +3,7 @@ from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
-from .models import Wallet, Transaction, GameSession
+from .models import Wallet, Transaction, GameSession, Referral, DailyTaskClaim
 
 @admin.register(Wallet)
 class WalletAdmin(admin.ModelAdmin):
@@ -109,3 +109,18 @@ class GameSessionAdmin(admin.ModelAdmin):
     list_display = ('user', 'game_type', 'reward', 'wait_seconds', 'started_at', 'claimed_at')
     list_filter = ('game_type', 'claimed_at')
     search_fields = ('user__username', 'user__email')
+
+
+@admin.register(Referral)
+class ReferralAdmin(admin.ModelAdmin):
+    list_display = ('invited', 'inviter', 'reward', 'status', 'created_at', 'credited_at')
+    search_fields = ('invited__username', 'invited__email', 'inviter__username', 'inviter__email')
+    list_filter = ('status', 'created_at')
+    readonly_fields = ('inviter', 'invited', 'reward', 'status', 'created_at', 'credited_at', 'transaction')
+
+@admin.register(DailyTaskClaim)
+class DailyTaskClaimAdmin(admin.ModelAdmin):
+    list_display = ('user', 'task_date', 'slot', 'title', 'reward', 'completed_at')
+    search_fields = ('user__username', 'user__email', 'title')
+    list_filter = ('task_date',)
+    readonly_fields = ('user', 'task_date', 'slot', 'title', 'reward', 'completed_at', 'transaction')

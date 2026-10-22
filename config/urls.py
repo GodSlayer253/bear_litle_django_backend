@@ -17,6 +17,8 @@ urlpatterns = [
     path("api/account/", views.account_state, name="account_state"),
     path("api/deposit/", views.deposit_request, name="deposit_request"),
     path("api/withdraw/", views.withdraw_request, name="withdraw_request"),
+    path("api/tasks/", views.daily_tasks, name="daily_tasks"),
+    path("api/tasks/claim/", views.daily_task_claim, name="daily_task_claim"),
     path("api/game/start/", views.game_start, name="game_start"),
     path("api/game/claim/", views.game_claim, name="game_claim"),
 ]

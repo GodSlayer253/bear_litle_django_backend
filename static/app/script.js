@@ -44,8 +44,22 @@ function renderHistory(transactions=[]){
   el.innerHTML=transactions.map(t=>`<article class="history-item"><span class="history-icon">${t.kind==='deposit'?'💳':t.kind==='withdrawal'?'↗':'🎮'}</span><div><b>${escapeHtml(t.description||labels[t.kind]||t.kind)}</b><small>${escapeHtml(labels[t.kind]||t.kind)} · ${escapeHtml(new Date(t.created_at).toLocaleString())} · ${escapeHtml(t.status)}</small></div><strong>${t.kind==='withdrawal'?'−':'+'}${Number(t.amount).toFixed(2)} USDT</strong></article>`).join('');
 }
 function formatDuration(seconds){seconds=Math.max(0,seconds|0);return `${Math.floor(seconds/3600)}h ${Math.floor((seconds%3600)/60)}m ${seconds%60}s`;}
+function renderDailyTasks(data){
+  const list=$('#dailyTasksList'); if(!list)return;
+  $('#taskPlanBadge').textContent=data.plan==='VIP'?'PLAN VIP':'PLAN NORMAL';
+  $('#taskPlanDescription').textContent=data.plan==='VIP'?'VIP: 4 tareas diarias de 5 USDT cada una (máximo previsto 20 USDT).':'Normal: 2 tareas diarias de 1 USDT cada una (máximo previsto 2 USDT).';
+  list.innerHTML=(data.tasks||[]).map(t=>`<article class="history-item"><span class="history-icon">${t.completed?'✅':'⛏️'}</span><div><b>${escapeHtml(t.title)}</b><small>${t.completed?'Completada hoy':'Tarea diaria · '+escapeHtml(data.date)}</small></div><strong>${Number(t.reward).toFixed(2)} USDT</strong><button class="button ${t.completed?'button-ghost':'button-green'} task-claim" data-slot="${t.slot}" ${t.completed?'disabled':''}>${t.completed?'Completada':'Completar'}</button></article>`).join('');
+  $$('.task-claim').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{const result=await request('/api/tasks/claim/',{slot:Number(btn.dataset.slot)});notify(result.message+' +'+Number(result.reward).toFixed(2)+' USDT');await loadAccount();}catch(e){notify(e.message);btn.disabled=false;}}));
+}
+function renderReferral(data){
+  const code=data.wallet?.referral_code||account?.referral_code; if(!code)return;
+  const url=new URL(window.location.origin+'/');url.searchParams.set('ref',code);
+  $('#referralLink').value=url.toString();
+  $('#referralStats').textContent=`Referidos acreditados: ${data.wallet.referral_count||0} · Recompensas: ${Number(data.wallet.referral_rewards||0).toFixed(2)} USDT`;
+}
+
 function renderAccount(data){
-  accountState=data;const w=data.wallet;
+  accountState=data;const w=data.wallet; renderDailyTasks(data.daily_tasks||{plan:w.vip_active?"VIP":"Normal",date:"",tasks:[]}); renderReferral(data);
   $('#balance').textContent=`${Number(w.balance).toFixed(2)} USDT`;
   $('#withdrawBalance').textContent=`${Number(w.balance).toFixed(2)} USDT`;
   $('#membershipStatus').textContent=w.vip_active?'VIP ⭐':'Básica';
@@ -131,4 +145,7 @@ setInterval(()=>{if(accountState?.wallet?.withdrawal_wait_seconds>0){accountStat
   for(const [selector,prefix] of [['#depositCountdown','Depósito pendiente de revisión. Tiempo estimado restante: '],['#withdrawReviewCountdown','Revisión manual del retiro: ']]){const el=$(selector);if(!el||!el.textContent)continue;const match=el.textContent.match(/(\d+)h (\d+)m (\d+)s/);if(match){let sec=Math.max(0,Number(match[1])*3600+Number(match[2])*60+Number(match[3])-1);el.textContent=selector==='#depositCountdown'?`${prefix}${formatDuration(sec)}.`:`${prefix}${formatDuration(sec)} restantes. El administrador podrá procesarlo al terminar el plazo.`;}}
   accountRefreshTicks++;if(logged&&accountRefreshTicks%60===0){loadAccount().catch(()=>{});}
 },1000);
+$('#copyReferral')?.addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#referralLink').value);notify('Enlace de referido copiado.');}catch(_){$('#referralLink').select();notify('Copia el enlace seleccionado.');}});
+$('#shareWhatsApp')?.addEventListener('click',()=>{const text=encodeURIComponent('¡Únete a bear.litle! Si creas una cuenta nueva con mi enlace, puedo recibir una recompensa de referido de 1 USDT cuando el registro sea válido: '+$('#referralLink').value);window.open('https://wa.me/?text='+text,'_blank','noopener');});
+$('#shareTelegram')?.addEventListener('click',()=>{const url=encodeURIComponent($('#referralLink').value);const text=encodeURIComponent('¡Únete a bear.litle! Recompensa de referido de 1 USDT para quien invita, tras un registro válido.');window.open('https://t.me/share/url?url='+url+'&text='+text,'_blank','noopener');});
 checkSession();

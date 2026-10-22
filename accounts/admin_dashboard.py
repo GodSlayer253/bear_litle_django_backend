@@ -10,7 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from .models import Wallet, Transaction, GameSession
+from .models import Wallet, Transaction, GameSession, Referral, DailyTaskClaim
 
 User = get_user_model()
 
@@ -79,6 +79,8 @@ def dashboard(request):
         'pending_transactions': Transaction.objects.filter(status=Transaction.Status.PENDING).count(),
         'recent_transactions': Transaction.objects.select_related('user').order_by('-created_at')[:10],
         'recent_games': GameSession.objects.select_related('user').order_by('-started_at')[:10],
+        'recent_referrals': Referral.objects.select_related('inviter', 'invited').order_by('-created_at')[:100],
+        'daily_task_claims': DailyTaskClaim.objects.select_related('user').order_by('-completed_at')[:50],
         'trace_note': 'No existe un modelo de trazas técnicas en los modelos actuales de Bear Litle. Esta sección muestra movimientos y sesiones de tareas/minijuegos almacenados.',
     }
     return render(request, 'accounts/admin_dashboard.html', context)
