@@ -62,9 +62,9 @@ function renderAccount(data){
   accountState=data;const w=data.wallet; renderDailyTasks(data.daily_tasks||{plan:w.vip_active?"VIP":"Normal",date:"",tasks:[]}); renderReferral(data);
   $('#balance').textContent=`${Number(w.balance).toFixed(2)} USDT`;
   $('#withdrawBalance').textContent=`${Number(w.balance).toFixed(2)} USDT`;
-  $('#membershipStatus').textContent=w.vip_active?'VIP ⭐':'Básica';
+  $('#membershipStatus').textContent=w.investment_plan?.name || (w.vip_active?'VIP ⭐':'Básica');
   $('#investedLabel').textContent=`Inversión verificada: ${Number(w.total_invested).toFixed(2)} USDT`;
-  $('#vipBadge').textContent=w.vip_active?'VIP ACTIVADO':'NO ACTIVADO';
+  $('#vipBadge').textContent=w.investment_plan?.name ? `${w.investment_plan.name} ACTIVO` : 'NO ACTIVADO';
   $('#withdrawRule').textContent=`Mínimo 2 USDT. Límite por retiro: ${Number(w.withdrawal_limit).toFixed(2)} USDT. Requiere inversión inicial verificada de 10 USDT y espera de 24 horas entre solicitudes.`;
   $('#withdrawSubmit').disabled=!w.initial_investment_met || w.withdrawal_wait_seconds>0;
   $('#withdrawStatus').textContent=!w.initial_investment_met?'INVERSIÓN REQUERIDA':w.withdrawal_wait_seconds>0?'EN ESPERA':'DISPONIBLE';
@@ -104,8 +104,7 @@ authForm.addEventListener('submit',async event=>{
 });
 
 $$('.dash-tab').forEach(tab=>tab.addEventListener('click',()=>setView(tab.dataset.view)));
-$('#vipInvestButton').addEventListener('click',()=>{ $('#depositAmount').value='60.00';$('#depositAmountLabel').textContent='60.00 USDT';$('#depositPlanHint').textContent='Solicitud de inversión para alcanzar el nivel VIP; requiere verificación manual.';setView('depositView');$('#depositAmountLabel').scrollIntoView({behavior:'smooth',block:'center'}); });
-$('#basicPlanButton').addEventListener('click',()=>{setView('depositView');$('#depositAmount').value='10.00';$('#depositAmountLabel').textContent='10.00 USDT';$('#depositPlanHint').textContent='Inversión inicial mínima: 10 USDT.';});
+$$('.plan-invest-button').forEach(button=>button.addEventListener('click',()=>{const amount=Number(button.dataset.amount).toFixed(2);$('#depositAmount').value=amount;$('#depositAmountLabel').textContent=`${amount} USDT`;$('#depositPlanHint').textContent=`Solicitud para el plan de ${amount} USDT. El nivel y el límite de retiro se activan solo después de verificar y aprobar el depósito.`;setView('depositView');$('#depositAmountLabel').scrollIntoView({behavior:'smooth',block:'center'});}));
 $('#depositForm').addEventListener('submit',async event=>{
   event.preventDefault();const button=event.submitter||event.target.querySelector('button[type="submit"]');button.disabled=true;$('#depositMessage').textContent='Registrando solicitud…';
   try{const result=await request('/api/deposit/',{amount:$('#depositAmount').value});$('#depositMessage').textContent=result.message;$('#depositCountdown').textContent=`El administrador revisará la solicitud. Tiempo estimado: ${formatDuration(result.transaction?.review_wait_seconds||7200)}.`;await loadAccount();notify('Solicitud de depósito registrada.');}

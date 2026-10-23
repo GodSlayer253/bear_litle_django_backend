@@ -145,6 +145,35 @@ def me(request):
     return JsonResponse({"authenticated": True, "user": user_payload(request.user)})
 
 @require_GET
+def withdrawal_limit_for(total_invested):
+    """Límite máximo por solicitud dentro de cada período de 24 horas."""
+    amount = Decimal(total_invested or '0.00')
+    if amount >= Decimal('180.00'):
+        return Decimal('40.00')
+    if amount >= Decimal('120.00'):
+        return Decimal('20.00')
+    if amount >= Decimal('60.00'):
+        return Decimal('10.00')
+    if amount >= Decimal('20.00'):
+        return Decimal('4.00')
+    return Decimal('2.00')
+
+
+def investment_plan_for(total_invested):
+    amount = Decimal(total_invested or '0.00')
+    if amount >= Decimal('180.00'):
+        return {'name': 'VIP 180', 'investment': '180.00', 'withdrawal_limit': '40.00'}
+    if amount >= Decimal('120.00'):
+        return {'name': 'VIP 120', 'investment': '120.00', 'withdrawal_limit': '20.00'}
+    if amount >= Decimal('60.00'):
+        return {'name': 'VIP 60', 'investment': '60.00', 'withdrawal_limit': '10.00'}
+    if amount >= Decimal('20.00'):
+        return {'name': 'VIP 20', 'investment': '20.00', 'withdrawal_limit': '4.00'}
+    if amount >= Decimal('10.00'):
+        return {'name': 'VIP 10', 'investment': '10.00', 'withdrawal_limit': '2.00'}
+    return {'name': 'Sin plan', 'investment': '0.00', 'withdrawal_limit': '0.00'}
+
+
 def account_state(request):
     if not request.user.is_authenticated:
         return JsonResponse({"message": "Inicia sesión."}, status=401)
@@ -157,7 +186,8 @@ def account_state(request):
         "vip_active": wallet.vip_active, "initial_investment_met": wallet.total_invested >= Decimal('10.00'),
         "next_withdrawal_at": next_withdrawal.isoformat() if next_withdrawal else None,
         "withdrawal_wait_seconds": max(0, int((next_withdrawal-now).total_seconds())) if next_withdrawal else 0,
-        "withdrawal_limit": "20.00" if wallet.vip_active else "2.00",
+        "withdrawal_limit": str(withdrawal_limit_for(wallet.total_invested)),
+        "investment_plan": investment_plan_for(wallet.total_invested),
         "referral_code": wallet.referral_code,
         "referral_count": Referral.objects.filter(inviter=request.user, status=Referral.Status.CREDITED).count(),
         "referral_rewards": str(Referral.objects.filter(inviter=request.user, status=Referral.Status.CREDITED).aggregate(total=__import__('django.db.models', fromlist=['Sum']).Sum('reward'))['total'] or Decimal('0.00'))},
@@ -289,7 +319,7 @@ def withdraw_request(request):
         if wallet.last_withdrawal_at and timezone.now() < wallet.last_withdrawal_at + timedelta(hours=24):
             ready = wallet.last_withdrawal_at + timedelta(hours=24)
             return JsonResponse({"message": "Aún está activo el período de espera de 24 horas.", "next_withdrawal_at": ready.isoformat()}, status=429)
-        limit = Decimal('20.00') if wallet.vip_active else Decimal('2.00')
+        limit = withdrawal_limit_for(wallet.total_invested)
         if amount > limit:
             return JsonResponse({"message": f'El límite por retiro para tu cuenta actual es {limit} USDT.'}, status=400)
         # Recalcular el saldo disponible dentro de la transacción, usando la cartera
