@@ -77,6 +77,10 @@ def dashboard(request):
         'wallet_count': Wallet.objects.count(),
         'total_balance': wallets.aggregate(total=Sum('balance'))['total'] or Decimal('0.00'),
         'pending_transactions': Transaction.objects.filter(status=Transaction.Status.PENDING).count(),
+        'pending_deposits': Transaction.objects.select_related('user').filter(
+            kind=Transaction.Kind.DEPOSIT,
+            status=Transaction.Status.PENDING,
+        ).order_by('created_at'),
         'pending_withdrawals': Transaction.objects.select_related('user').filter(
             kind=Transaction.Kind.WITHDRAWAL,
             status=Transaction.Status.PENDING,
@@ -88,6 +92,70 @@ def dashboard(request):
         'trace_note': 'No existe un modelo de trazas técnicas en los modelos actuales de Bear Litle. Esta sección muestra movimientos y sesiones de tareas/minijuegos almacenados.',
     }
     return render(request, 'accounts/admin_dashboard.html', context)
+
+
+@staff_required
+@require_http_methods(['POST'])
+def review_transaction(request, transaction_id):
+    """Aprobar o rechazar depósitos/retiros desde el panel de gestión."""
+    action = (request.POST.get('action') or '').strip()
+    if action not in ('approve', 'reject'):
+        messages.error(request, 'Acción no válida.')
+        return redirect('admin_dashboard')
+
+    with db_transaction.atomic():
+        tx = get_object_or_404(
+            Transaction.objects.select_for_update(), pk=transaction_id
+        )
+        if tx.status != Transaction.Status.PENDING:
+            messages.warning(request, f'La solicitud #{tx.pk} ya fue revisada.')
+            return redirect('admin_dashboard')
+
+        wallet, _ = Wallet.objects.get_or_create(user=tx.user)
+        wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+
+        if action == 'approve':
+            if tx.kind == Transaction.Kind.DEPOSIT:
+                if tx.amount < Decimal('10.00'):
+                    messages.error(request, f'No se puede aprobar el depósito #{tx.pk}: el mínimo es 10 USDT.')
+                    return redirect('admin_dashboard')
+                # El saldo solo se acredita después de la comprobación manual.
+                wallet.balance += tx.amount
+                wallet.total_invested += tx.amount
+                wallet.vip_active = wallet.total_invested >= Decimal('60.00')
+                wallet.save(update_fields=['balance', 'total_invested', 'vip_active'])
+            elif tx.kind == Transaction.Kind.WITHDRAWAL:
+                # Los retiros tienen el saldo reservado al crear la solicitud.
+                from datetime import timedelta
+                if timezone.now() < tx.created_at + timedelta(hours=2):
+                    messages.error(request, f'El retiro #{tx.pk} aún no cumple el plazo de revisión de 2 horas.')
+                    return redirect('admin_dashboard')
+                wallet.last_withdrawal_at = timezone.now()
+                wallet.save(update_fields=['last_withdrawal_at'])
+            else:
+                messages.error(request, 'Desde esta pantalla solo se pueden revisar depósitos y retiros.')
+                return redirect('admin_dashboard')
+            tx.status = Transaction.Status.APPROVED
+            tx.description = ((tx.description + ' | ') if tx.description else '') + f'Aprobado por {request.user.username}.'
+            success_text = f'Solicitud #{tx.pk} aprobada. '
+            if tx.kind == Transaction.Kind.DEPOSIT:
+                success_text += f'Se acreditaron {tx.amount:.2f} USDT a {tx.user.username}.'
+            else:
+                success_text += 'Registra la transferencia manual del retiro por separado.'
+            messages.success(request, success_text)
+        else:
+            # Si se rechaza un retiro, se devuelve el saldo reservado.
+            if tx.kind == Transaction.Kind.WITHDRAWAL:
+                wallet.balance += tx.amount
+                wallet.save(update_fields=['balance'])
+            tx.status = Transaction.Status.REJECTED
+            tx.description = ((tx.description + ' | ') if tx.description else '') + f'Rechazado por {request.user.username}.'
+            messages.warning(request, f'Solicitud #{tx.pk} rechazada.' + (' El saldo reservado del retiro fue devuelto.' if tx.kind == Transaction.Kind.WITHDRAWAL else ' No se modificó el saldo del usuario.'))
+
+        tx.reviewed_at = timezone.now()
+        tx.save(update_fields=['status', 'description', 'reviewed_at'])
+
+    return redirect('admin_dashboard')
 
 
 @staff_required

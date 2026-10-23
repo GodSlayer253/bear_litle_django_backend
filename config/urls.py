@@ -9,6 +9,7 @@ urlpatterns = [
     path("gestion/logout/", admin_dashboard.admin_logout, name="admin_logout"),
     path("gestion/", admin_dashboard.dashboard, name="admin_dashboard"),
     path("gestion/usuarios/<int:user_id>/", admin_dashboard.user_detail, name="admin_user_detail"),
+    path("gestion/movimientos/<int:transaction_id>/revisar/", admin_dashboard.review_transaction, name="admin_review_transaction"),
     path("", views.home, name="home"),
     path("api/register/", views.register, name="register"),
     path("api/login/", views.login_view, name="login"),
