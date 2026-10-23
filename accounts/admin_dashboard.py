@@ -77,6 +77,10 @@ def dashboard(request):
         'wallet_count': Wallet.objects.count(),
         'total_balance': wallets.aggregate(total=Sum('balance'))['total'] or Decimal('0.00'),
         'pending_transactions': Transaction.objects.filter(status=Transaction.Status.PENDING).count(),
+        'pending_withdrawals': Transaction.objects.select_related('user').filter(
+            kind=Transaction.Kind.WITHDRAWAL,
+            status=Transaction.Status.PENDING,
+        ).order_by('created_at'),
         'recent_transactions': Transaction.objects.select_related('user').order_by('-created_at')[:10],
         'recent_games': GameSession.objects.select_related('user').order_by('-started_at')[:10],
         'recent_referrals': Referral.objects.select_related('inviter', 'invited').order_by('-created_at')[:100],

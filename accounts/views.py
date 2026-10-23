@@ -60,7 +60,7 @@ def transaction_payload(tx):
     ready_at = tx.created_at + timedelta(hours=REVIEW_HOURS) if tx.status == Transaction.Status.PENDING and tx.kind in (Transaction.Kind.DEPOSIT, Transaction.Kind.WITHDRAWAL) else None
     now = timezone.now()
     return {"id": tx.id, "kind": tx.kind, "status": tx.status, "amount": str(tx.amount),
-            "description": tx.description, "created_at": tx.created_at.isoformat(), "txid": tx.txid,
+            "description": tx.description, "created_at": tx.created_at.isoformat(), "txid": tx.txid, "destination": tx.destination,
             "review_ready_at": ready_at.isoformat() if ready_at else None,
             "review_wait_seconds": max(0, int((ready_at-now).total_seconds())) if ready_at else 0}
 
@@ -292,12 +292,30 @@ def withdraw_request(request):
         limit = Decimal('20.00') if wallet.vip_active else Decimal('2.00')
         if amount > limit:
             return JsonResponse({"message": f'El límite por retiro para tu cuenta actual es {limit} USDT.'}, status=400)
-        if amount > wallet.balance:
-            return JsonResponse({"message": "El saldo disponible verificado es insuficiente."}, status=400)
-        wallet.balance -= amount
+        # Recalcular el saldo disponible dentro de la transacción, usando la cartera
+        # bloqueada, para impedir que el usuario retire más de lo que tiene.
+        available_balance = wallet.balance
+        if amount <= Decimal('0.00'):
+            return JsonResponse({"message": "El importe debe ser mayor que cero."}, status=400)
+        if amount > available_balance:
+            return JsonResponse({
+                "message": "Saldo insuficiente. No puedes retirar más de tu saldo disponible.",
+                "available_balance": str(available_balance),
+                "requested_amount": str(amount),
+            }, status=400)
+        balance_after_withdrawal = (available_balance - amount).quantize(Decimal('0.01'))
+        if balance_after_withdrawal < Decimal('0.00'):
+            return JsonResponse({"message": "El retiro no puede dejar el saldo negativo."}, status=400)
+
+        wallet.balance = balance_after_withdrawal
         wallet.save(update_fields=['balance'])
-        tx = Transaction.objects.create(user=request.user, kind=Transaction.Kind.WITHDRAWAL, amount=amount,
-            destination=destination, description='Retiro pendiente de revisión y envío manual')
+        tx = Transaction.objects.create(
+            user=request.user,
+            kind=Transaction.Kind.WITHDRAWAL,
+            amount=amount,
+            destination=destination,
+            description='Retiro pendiente de revisión y envío manual',
+        )
     ready = tx.created_at + timedelta(hours=REVIEW_HOURS)
     subject = f'[bear.litle] Retiro pendiente #{tx.id} — {amount} USDT'
     body = (f'Se ha registrado una solicitud de retiro.\n\nUsuario: {request.user.username}\n'
@@ -308,8 +326,13 @@ def withdraw_request(request):
     sent = notify_admin(subject, body)
     message = ("Solicitud de retiro registrada y correo enviado al administrador. Podrá procesarse después del plazo de revisión de 2 horas." if sent else
                "Solicitud de retiro registrada, pero no se pudo enviar el correo. La cuenta de correo del administrador debe configurarse en el servidor.")
-    return JsonResponse({"message": message, "email_notification_sent": sent,
-                         "review_ready_at": ready.isoformat(), "transaction": transaction_payload(tx)}, status=201)
+    return JsonResponse({
+        "message": message,
+        "email_notification_sent": sent,
+        "review_ready_at": ready.isoformat(),
+        "balance_after_withdrawal": str(balance_after_withdrawal),
+        "transaction": transaction_payload(tx),
+    }, status=201)
 
 @require_POST
 def game_start(request):
